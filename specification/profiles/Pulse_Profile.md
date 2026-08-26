@@ -416,6 +416,18 @@ The following Pulse runtime functions must be supported by all backends:
 | `__quantum__rt__pulse__waveform_gaussian`     | `ptr(double %amplitude, double %sigma, double %duration)` | Constructs a Gaussian-envelope waveform with peak amplitude `%amplitude`, standard deviation `%sigma (seconds)`, and total duration `%duration (seconds)`, centered at `%duration / 2`, and returns a reference to it.       |
 | `__quantum__rt__pulse__waveform_from_samples` | `ptr(ptr %samples, i64 %n_samples, double %sample_rate)`  | Constructs a waveform from `%n_samples` complex-valued IQ samples pointed to by `%samples`, discretized at the description sample rate `%sample_rate (Hz)`. The resulting envelope has duration `%n_samples / %sample_rate`. |
 
+The above functions dynamically construct resources at runtime. Dynamic
+construction is indicated via the module flags: `dynamic_port_management`,
+`dynamic_frame_management`, `dynamic_waveform_management`. To reclaim the
+constructed or allocated resources, following resource release functions can be
+used:
+
+```llvm
+declare void @__quantum__rt__pulse__release_port(ptr %port)
+declare void @__quantum__rt__pulse__release_frame(ptr %frame)
+declare void @__quantum__rt__pulse__release_waveform(ptr %waveform)
+```
+
 ### Initialization Functions
 
 ## Attributes
@@ -426,9 +438,38 @@ following key difference with respect to attributes attached to an entry point
 function:
 
 - The Pulse Profile does not support the `"required_num_qubits"` attribute since
-  the pulse profile does not define a `"qubit"` resource.
+  the profile does not define a `"qubit"` resource.
 
 ## Module Flags Metadata
+
+The Pulse Profile requires the following module flags to be present within the
+QIR bitcode:
+
+- a flag with the string identifier `"qir_major_version"` that contains a
+  constant value of type `i32`
+- a flag with the string identifier `"qir_minor_version"` that contains a
+  constant value of type `i32`
+- a flag with the string identifier `"dynamic_port_management"` that contains a
+  constant `true` or `false` value of type `i1` indicating whether the program
+  uses dynamic port construction and release. When set to `true`, the runtime
+  API functions `__quantum__rt__pulse__get_port` and
+  `__quantum__rt__pulse__release_port` may be used in the program.
+- a flag with the string identifier `"dynamic_frame_management"` that contains a
+  constant `true` or `false` value of type `i1` indicating whether the program
+  uses dynamic frame construction and release. When set to `true`, the runtime
+  API functions `__quantum__rt__pulse__create_frame` and
+  `__quantum__rt__pulse__release_frame` may be used in the program.
+- a flag with the string identifier `"dynamic_waveform_management"` that
+  contains a constant `true` or `false` value of type `i1` indicating whether
+  the program uses dynamic waveform construction and release. When set to
+  `true`, the runtime API functions `__quantum__rt__pulse__waveform_gaussian` or
+  `__quantum__rt__pulse__waveform_from_samples` for waveform construction and
+  `__quantum__rt__pulse__release_waveform` for waveform release may be used in
+  the program.
+
+These flags are attached as `llvm.module.flags` metadata to the module. They can
+be queried using the standard LLVM tools and follow the LLVM specification in
+behavior and purpose.
 
 ## Additional Examples
 
