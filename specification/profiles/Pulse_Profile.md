@@ -38,9 +38,9 @@ A Port denotes a hardware-level control endpoint: a physical channel on the
 quantum control system through which pulses are emitted or measurements are
 acquired. Ports are static properties of the target hardware; in the mandatory
 capabilities of this profile, a program does not construct ports, but references
-them as declared in module-level metadata (see Program Structure). Two Port
-references identify the same physical endpoint if and only if their pointer
-values are equal.
+them as declared in module-level metadata (see
+[Program Structure](#program-structure)). Two Port references identify the same
+physical endpoint if and only if their pointer values are equal.
 
 ### Frame
 
@@ -63,6 +63,8 @@ advances only as follows:
 
 - Playing a waveform on the frame advances the clock by the waveform's duration.
 - Inserting a delay on the frame advances the clock by the delay's duration.
+- Acquiring a measurement on the frame advances the clock by the integration
+  duration.
 - Synchronizing a frame with other frames advances its clock to the maximum of
   the clocks of all frames being synchronized.
 
@@ -101,9 +103,9 @@ must support the following mandatory capabilities:
 2. It supports acquiring the state associated with a frame's port at the end of
    the program.
 
-3. Pulse resources — Ports, Frames, and Waveforms are declared via module-level
-   metadata and referenced as compile-time constants, as defined in the section
-   on Program Structure.
+3. It supports declaring Pulse resources — Ports, Frames, and Waveforms via
+   module-level metadata and referencing them as compile-time constants, as
+   defined in the section on [Program Structure](#program-structure).
 
 4. It produces one of the specified [output schemas](../output_schemas/).
 
@@ -117,18 +119,20 @@ Beyond the mandatory capabilities above, a backend can opt into one or more of
 the following optional capabilities to support more advanced pulse-level
 programs:
 
-1. Dynamic construction and release of Port references at runtime, via the
+<!-- markdownlint-disable MD029 -->
+
+5. Dynamic construction and release of Port references at runtime, via the
    `__quantum__rt__pulse__*` functions defined in this specification, rather
    than declaring them via module-level metadata alone. Support for this
    capability is indicated by the `dynamic_port_management` module flag.
 
-2. Dynamic construction and release of Frame references at runtime, allowing a
+6. Dynamic construction and release of Frame references at runtime, allowing a
    frame's **port binding**, **initial frequency**, and **initial phase** to be
    determined by values computed during program execution rather than fixed at
    compile time. Support for this capability is indicated by the
    `dynamic_frame_management` module flag.
 
-3. Dynamic construction and release of Waveform references at runtime, including
+7. Dynamic construction and release of Waveform references at runtime, including
    construction from a caller-supplied sample buffer whose contents are computed
    during program execution. Support for this capability is indicated by the
    `dynamic_waveform_management` module flag.
@@ -193,21 +197,21 @@ block labels used in this example are a convention for readability, not a
 requirement.:
 
 ```llvm
-; module-level metadata declaring the pulse resources used by this program
 
+; module-level metadata declaring the pulse resources used by this program
 !qir.pulse.ports = !{!5, !6}      ; Two ports
 !5 = !{i64 0, !"drive_q0"}
 !6 = !{i64 1, !"readout_q0"}
 
 !qir.pulse.frames = !{!7, !8}     ; Two frames
 ; frame 0: bound to port 0, 5.0 GHz frequency, initial phase=0.0 rad
-!7 = !{i64 0, i64 0, double 5.0e9, double 0.0}
+!7 = !{i64 0, i64 0, double 5.0e9, double 0.0}      ; {frame-id, port-id, frequency, phase}
 ; frame 1: bound to port 1, 7.0 GHz frequency, initial phase=0.0 rad
 !8 = !{i64 1, i64 1, double 7.0e9, double 0.0}
 
 !qir.pulse.waveforms = !{!9}      ; single waveform
 ; waveform 0, shape="gaussian", amplitude=2.0, standard deviation=8ns, duration=32ns
-!9 = !{i64 0, !"gaussian", double 0.20, double 8.0e-9, double 3.2e-8}
+!9 = !{i64 0, !"gaussian", double 2.0, double 8.0e-9, double 3.2e-8}
 
 ; global constants (labels for output recording)
 
@@ -225,14 +229,17 @@ body:                                       ; preds = %entry
   ; calls to QIS functions that are not irreversible
   call void @__quantum__qis__pulse__play__body(ptr null, ptr null)              ; args: (frame 0, waveform 0)
   call void @__quantum__qis__pulse__delay__body(ptr null, double 8.0e-9)        ; args: (frame 0, duration)
-  call void @__quantum__qis__pulse__shift__phase__body(ptr null, double  1.5707963)  ; args: (frame 0, phase)
+  call void @__quantum__qis__pulse__shift__phase__body(ptr null, double 1.5707963)  ; args: (frame 0, phase)
   call void @__quantum__qis__pulse__play__body(ptr null, ptr null)              ; args : (frame 0, waveform 0)
-  call void @__quantum__qis__pulse__shift__phase__body(ptr null, double -1.5707963)  ; args : (frame 0, waveform 0)
+  call void @__quantum__qis__pulse__shift__phase__body(ptr null, double -1.5707963)
   br label %measurements
 
 measurements:                               ; preds = %body
+  ; Synchronize the frames
+  call void (i64, ...) @__quantum__qis__pulse__barrier__body(i64 2, ptr null, ptr nonnull inttoptr (i64 1 to ptr))
+
   ; calls to QIS functions that are irreversible
-  call void @__quantum__qis__pulse__acquire__body(ptr inttoptr (i64 1 to ptr), double 2.0e-6, ptr writeonly null) ; args : (frame 1, duration, result 0)
+  call void @__quantum__qis__pulse__acquire__body(ptr nonnull inttoptr (i64 1 to ptr), double 2.0e-6, ptr writeonly null) ; args : (frame 1, duration, result 0)
   br label %output
 
 output:                                     ; preds = %measurements
@@ -246,6 +253,7 @@ output:                                     ; preds = %measurements
 declare void @__quantum__qis__pulse__play__body(ptr, ptr)
 declare void @__quantum__qis__pulse__delay__body(ptr, double)
 declare void @__quantum__qis__pulse__shift__phase__body(ptr, double)
+declare void @__quantum__qis__pulse__barrier__body(i64, ...)
 declare void @__quantum__qis__pulse__acquire__body(ptr, double, ptr writeonly) #1
 
 ; declarations of runtime functions for initialization and output recording
@@ -292,7 +300,7 @@ used to indicate a successful execution of the program. Any other value of the
 exit code indicates a failure during execution.
 
 Execution starts at the entry
-[Basic Block](<(https://en.wikipedia.org/wiki/Basic_block)>) and follows the
+[Basic Block](https://en.wikipedia.org/wiki/Basic_block) and follows the
 [control flow graph](https://en.wikipedia.org/wiki/Control-flow_graph) defined
 by the function's basic blocks and their terminators, ending when a block
 terminates in a `ret` instruction. This profile does not impose a fixed number
@@ -308,7 +316,7 @@ defines how to do that. Calls to [runtime functions](#pulse-runtime-pulse-rt)
 used for initialization may only appear at the beginning of the program.
 
 Calls to QIS functions
-[**quantum__qis__pulse***](#pulse-quantum-instruction-set-pulse-qis) must always
+[quantum__qis__pulse*](#pulse-quantum-instruction-set-pulse-qis) must always
 return `void`, regardless of which optional capabilities of this profile are
 enabled. Where the optional dynamic resource-management capabilities (see
 Optional Capabilities) are _not_ enabled, all arguments to QIS function calls
@@ -344,8 +352,8 @@ functions.
 The Pulse Quantum Instruction Set (Pulse-QIS) is a namespaced set of
 `__quantum__qis__pulse__*` intrinsic functions that operate on
 [opaque types](#definitions-and-data-structures). Together they cover the
-operations required to construct pulse resources, manipulate frame state, and
-play and acquire pulses on hardware.
+operations required to manipulate frame state, and play and acquire pulses on
+hardware.
 
 For a quantum instruction set to be fully compatible with the Pulse Profile, it
 must satisfy the following requirements:
@@ -369,15 +377,15 @@ must satisfy the following requirements:
    preserved regardless of the specific QIS implementation provided by a
    backend.
 
-| Function                                      | Signature                                                                 | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| --------------------------------------------- | ------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `__quantum__qis__pulse__play__body`           | `void(ptr %frame, ptr %waveform)`                                         | Executes the waveform referenced by `%waveform` on the frame referenced by `%frame`. The frame is bound to a specific port at construction time, so the port reference is implicit. The waveform carries a duration parameter, which is used by the play intrinsic to set the duration of execution. This intrinsic also advances the clock of the frame by the waveform's duration.                                                                                                                      |
-| `__quantum__qis__pulse__delay__body`          | `void(ptr %frame, double %duration)`                                      | Inserts a delay of `%duration` (seconds) on the frame referenced by `%frame`. Note that this is not a global delay operation, it is specific to a frame. This intrinsic advances the clock of the frame by the specified duration.                                                                                                                                                                                                                                                                        |
-| `__quantum__qis__pulse__acquire__body`        | `void(ptr %frame, double %duration, ptr writeonly %result) #irreversible` | Acquires a measurement on the port bound to the frame referenced by `%frame`, integrating for `%duration` (seconds). Writes the classified result to `%result`. Here, the term "integration" means collapsing a stream of samples into a single output (IQ point). Whereas, the term "classification" means mapping that IQ point to a 0 or 1 bit.                                                                                                                                                        |
-| `__quantum__qis__pulse__barrier__body`        | `void(i64 %n_frames, ptr %frame1,...)`                                    | Synchronizes the timelines of the frames passed as variadic arguments. The count `%n_frames` gives the number of frame references that follow; each subsequent variadic argument is a ptr denoting a Frame reference. This intrinsic advances the clocks of every listed frame by the sum of durations of all the frames. After the barrier, all listed frames are aligned, and subsequent operations on any of these frames are scheduled from that common time point. Frames not listed are unaffected. |
-| `__quantum__qis__pulse__set__frequency__body` | `void(ptr %frame, double %frequency)`                                     | Sets the carrier frequency of the frame referenced by `%frame` to `%frequency` (Hz).                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `__quantum__qis__pulse__set__phase__body`     | `void(ptr %frame, double %phase)`                                         | Sets the accumulated phase of the frame referenced by`%frame` to `%phase` (radians).                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `__quantum__qis__pulse__shift__phase__body`   | `void(ptr %frame, double %delta_phase)`                                   | Adds `%delta_phase (radians)` to the accumulated phase of the frame referenced by `%frame`.                                                                                                                                                                                                                                                                                                                                                                                                               |
+| Function                                      | Signature                                                                 | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| --------------------------------------------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `__quantum__qis__pulse__play__body`           | `void(ptr %frame, ptr %waveform)`                                         | Executes the waveform referenced by `%waveform` on the frame referenced by `%frame`. The frame is bound to a specific port at construction time, so the port reference is implicit. The waveform carries a duration parameter, which is used by the play intrinsic to set the duration of execution. This intrinsic also advances the clock of the frame by the waveform's duration.                                                                                                                         |
+| `__quantum__qis__pulse__delay__body`          | `void(ptr %frame, double %duration)`                                      | Inserts a delay of `%duration` (seconds) on the frame referenced by `%frame`. Note that this is not a global delay operation, it is specific to a frame. This intrinsic advances the clock of the frame by the specified duration.                                                                                                                                                                                                                                                                           |
+| `__quantum__qis__pulse__acquire__body`        | `void(ptr %frame, double %duration, ptr writeonly %result) #irreversible` | Acquires a measurement on the port bound to the frame referenced by `%frame`, integrating for `%duration` (seconds). Writes the classified result to `%result`. Here, the term "integration" means collapsing a stream of samples into a single output (IQ point). Whereas, the term "classification" means mapping that IQ point to a 0 or 1 bit.                                                                                                                                                           |
+| `__quantum__qis__pulse__barrier__body`        | `void(i64 %n_frames, ptr %frame1,...)`                                    | Synchronizes the timelines of the frames passed as variadic arguments. The count `%n_frames` gives the number of frame references that follow; each subsequent variadic argument is a `ptr` denoting a Frame reference. This intrinsic advances the clocks of every listed frame to the maximum of the clocks of all frames. After the barrier, all listed frames are aligned, and subsequent operations on any of these frames are scheduled from that common time point. Frames not listed are unaffected. |
+| `__quantum__qis__pulse__set__frequency__body` | `void(ptr %frame, double %frequency)`                                     | Sets the carrier frequency of the frame referenced by `%frame` to `%frequency` (Hz).                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `__quantum__qis__pulse__set__phase__body`     | `void(ptr %frame, double %phase)`                                         | Sets the accumulated phase of the frame referenced by`%frame` to `%phase` (radians).                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `__quantum__qis__pulse__shift__phase__body`   | `void(ptr %frame, double %delta_phase)`                                   | Adds `%delta_phase (radians)` to the accumulated phase of the frame referenced by `%frame`.                                                                                                                                                                                                                                                                                                                                                                                                                  |
 
 ## Classical Instructions
 
@@ -406,11 +414,19 @@ The following Pulse runtime functions must be supported by all backends:
 | `__quantum__rt__pulse__get_port`              | `ptr(i64 %port_id)`                                       | Returns a reference to the hardware port identified by the target-defined integer `%port_id`.                                                                                                                                |
 | `__quantum__rt__pulse__create_frame`          | `ptr(ptr %port, double %frequency, double %phase)`        | Constructs a new frame bound to the port referenced by `%port`, with initial carrier frequency `%frequency (Hz)` and initial phase `%phase (radians)`, and returns a reference to it.                                        |
 | `__quantum__rt__pulse__waveform_gaussian`     | `ptr(double %amplitude, double %sigma, double %duration)` | Constructs a Gaussian-envelope waveform with peak amplitude `%amplitude`, standard deviation `%sigma (seconds)`, and total duration `%duration (seconds)`, centered at `%duration / 2`, and returns a reference to it.       |
-| `__quantum__rt__pulse__waveform_from_samples` | `ptr (ptr %samples, i64 %n_samples, double %sample_rate)` | Constructs a waveform from `%n_samples` complex-valued IQ samples pointed to by `%samples`, discretized at the description sample rate `%sample_rate (Hz)`. The resulting envelope has duration `%n_samples / %sample_rate`. |
+| `__quantum__rt__pulse__waveform_from_samples` | `ptr(ptr %samples, i64 %n_samples, double %sample_rate)`  | Constructs a waveform from `%n_samples` complex-valued IQ samples pointed to by `%samples`, discretized at the description sample rate `%sample_rate (Hz)`. The resulting envelope has duration `%n_samples / %sample_rate`. |
 
 ### Initialization Functions
 
 ## Attributes
+
+The attribute usage and requirements of the Pulse Profile remain mostly the same
+as defined in the [Base Profile](./Base_Profile.md#attributes) but with
+following key difference with respect to attributes attached to an entry point
+function:
+
+- The Pulse Profile does not support the `"required_num_qubits"` attribute since
+  the pulse profile does not define a `"qubit"` resource.
 
 ## Module Flags Metadata
 
